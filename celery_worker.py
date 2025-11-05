@@ -4,6 +4,29 @@ import torch
 from transformers import pipeline
 import scipy.io.wavfile
 
+# A dictionary to hold our loaded models. This allows us to load them once
+# per worker and reuse them across tasks.
+PIPELINES = {}
+
+def initialize_pipelines():
+    """Loads all supported models into the global PIPELINES dictionary."""
+    print("Initializing supported pipelines...")
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    # Load MusicGen
+    print("Loading facebook/musicgen-small...")
+    PIPELINES["musicgen"] = pipeline(
+        "text-to-audio",
+        "facebook/musicgen-small",
+        device=device
+    )
+    print("facebook/musicgen-small loaded.")
+
+    # Placeholder for SongGeneration - we don't load it to avoid resource issues.
+    # In a real production environment, you would load it here.
+    PIPELINES["songgeneration"] = None
+    print("Pipelines initialized.")
+
 # Configure Celery
 celery_app = Celery(
     'tasks',
@@ -11,27 +34,30 @@ celery_app = Celery(
     backend='redis://localhost:6379/0'
 )
 
-# Initialize the synthesis pipeline globally.
-# This is a heavy object, so we want to load it only once per worker process.
-print("Initializing music generation pipeline...")
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
-synthesiser = pipeline(
-    "text-to-audio",
-    "facebook/musicgen-small",
-    device=device
-)
-print("Pipeline initialized.")
+# Initialize pipelines when the worker starts.
+initialize_pipelines()
 
 
 @celery_app.task(name='create_music_task')
-def create_music_task(prompt: str):
+def create_music_task(prompt: str, model_name: str = "musicgen"):
     """
-    A Celery task to generate music using the real model.
+    A Celery task to generate music using a specified model.
     """
-    print(f"Received music generation task for prompt: '{prompt}'")
+    print(f"Received task for model '{model_name}' with prompt: '{prompt}'")
 
-    # Generate music using the pre-loaded pipeline
-    print("Generating music...")
+    if model_name not in PIPELINES:
+        raise ValueError(f"Model '{model_name}' is not supported.")
+
+    if model_name == "songgeneration":
+        # This is the placeholder logic.
+        print("Model 'songgeneration' is not fully integrated due to high resource requirements.")
+        raise NotImplementedError("Model 'songgeneration' requires a dedicated GPU environment and is not available.")
+
+    # Get the appropriate pipeline
+    synthesiser = PIPELINES[model_name]
+
+    # Generate music
+    print(f"Generating music with {model_name}...")
     music = synthesiser(prompt, forward_params={"do_sample": True})
 
     # Prepare the output directory and filename
@@ -48,5 +74,4 @@ def create_music_task(prompt: str):
 
     print(f"Music generation complete for task {task_id}.")
 
-    # Return the path to the generated file
     return output_filename

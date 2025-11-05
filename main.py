@@ -1,12 +1,20 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from celery.result import AsyncResult
 from celery_worker import create_music_task
+from typing import Literal
 
 app = FastAPI()
 
+# Define the supported models using Literal for validation
+SupportedModels = Literal["musicgen", "songgeneration"]
+
 class GenerationRequest(BaseModel):
     prompt: str
+    model_name: SupportedModels = Field(
+        default="musicgen",
+        description="The model to use for generation. Currently supported: 'musicgen'."
+    )
 
 class TaskResponse(BaseModel):
     task_id: str
@@ -20,10 +28,10 @@ class StatusResponse(BaseModel):
 @app.post("/generate", response_model=TaskResponse)
 async def generate_music(request: GenerationRequest):
     """
-    Accepts a music generation prompt, launches a background task,
+    Accepts a music generation prompt, launches a background task for the specified model,
     and returns the task ID.
     """
-    task = create_music_task.delay(request.prompt)
+    task = create_music_task.delay(request.prompt, request.model_name)
     return {"task_id": task.id}
 
 
@@ -40,7 +48,10 @@ async def get_status(task_id: str):
         "result": None
     }
 
-    if task_result.successful():
+    # If the task failed, include the error message in the result
+    if task_result.failed():
+        response["result"] = str(task_result.info) # .info contains the exception
+    elif task_result.successful():
         response["result"] = task_result.result
 
     return response
